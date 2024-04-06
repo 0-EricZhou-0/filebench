@@ -43,6 +43,7 @@
 
 /* Global statistics */
 static struct flowstats *globalstats = NULL;
+static struct flowstats *printstats = NULL;
 
 /*
  * Add a flowstat b to a, leave sum in a.
@@ -68,6 +69,43 @@ stats_add(struct flowstats *a, struct flowstats *b)
 
 	for (i = 0; i < OSPROF_BUCKET_NUMBER; i++)
 		a->fs_distribution[i] += b->fs_distribution[i];
+}
+
+uint64_t report_microsec_since_epoch(void)
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	uint64_t microseconds_since_epoch =
+		(uint64_t) (tv.tv_sec) * 1000000 + (uint64_t) (tv.tv_usec);
+	return microseconds_since_epoch;
+}
+
+uint64_t get_time_microsec_from_start(void)
+{
+	return (gethrtime() - globalstats->fs_stime) / 1000;
+}
+
+void stat_snap_non_blocking(void)
+{
+	static int start_time_printed = 0;
+	if (printstats == NULL) return;
+	if (start_time_printed == 0) {
+		filebench_log(LOG_INFO, "Start time microsec since Epoch: %lld",
+				report_microsec_since_epoch() - get_time_microsec_from_start()
+		);
+		start_time_printed = 1;
+	}
+	(void) memset(printstats, 0, FLOW_TYPES * sizeof (struct flowstats));
+	flowop_t *flowop_print_start = filebench_shm->shm_flowoplist;
+	while (flowop_print_start->fo_next) {
+		flowop_print_start = flowop_print_start->fo_next;
+		stats_add(&printstats[FLOW_TYPE_GLOBAL], &flowop_print_start->fo_stats);
+	}
+	struct flowstats *giostat = &printstats[FLOW_TYPE_GLOBAL];
+	double total_time_sec = (gethrtime() - globalstats->fs_stime) / SEC2NS_FLOAT;
+	double ops_per_sec = giostat->fs_count / total_time_sec;
+	filebench_log(LOG_INFO, "time: %15.9lf throughput: %5.3lf ops/s",
+			total_time_sec, ops_per_sec);
 }
 
 /*
@@ -252,6 +290,11 @@ stats_clear(void)
 		globalstats = malloc(FLOW_TYPES * sizeof (struct flowstats));
 
 	(void) memset(globalstats, 0, FLOW_TYPES * sizeof (struct flowstats));
+
+	if (printstats == NULL)
+		printstats = malloc(FLOW_TYPES * sizeof(struct flowstats));
+
+	(void) memset(printstats, 0, FLOW_TYPES * sizeof (struct flowstats));
 
 	flowop = filebench_shm->shm_flowoplist;
 

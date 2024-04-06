@@ -30,6 +30,8 @@
 #include "fbtime.h"
 
 void stats_clear(void);
+uint64_t get_time_microsec_from_start(void);
+void stat_snap_non_blocking(void);
 void stats_snap(void);
 
 #define OSPROF_BUCKET_NUMBER	64

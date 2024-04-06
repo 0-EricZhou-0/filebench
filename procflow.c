@@ -27,6 +27,7 @@
 
 #include <signal.h>
 #include <fcntl.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 
@@ -39,6 +40,10 @@
 /* pid and procflow pointer for this process */
 pid_t my_pid;
 procflow_t *my_procflow = NULL;
+
+pthread_t stat_print_tid;
+volatile int stat_print_start = 0;
+volatile int stat_print_terminate = 0;
 
 static procflow_t *procflow_define_common(procflow_t **list, char *name,
     procflow_t *inherit, int instance);
@@ -777,6 +782,21 @@ procflow_define(char *name, avd_t instances)
 	return (procflow);
 }
 
+#define STAT_PRINT_INTERVAL_NS (50000000UL) // 0.05s
+#define NANO (1000000000UL)
+
+void *stat_printer(void *args)
+{
+	struct timespec sleep_interval;
+	sleep_interval.tv_sec = STAT_PRINT_INTERVAL_NS / NANO;
+	sleep_interval.tv_nsec = STAT_PRINT_INTERVAL_NS % NANO;
+	while (!stat_print_start) {}
+	while (!stat_print_terminate) {
+		nanosleep(&sleep_interval, NULL);
+		stat_snap_non_blocking();
+	}
+}
+
 /*
  * Creates and starts all defined procflow processes. The call to
  * procflow_init() results in creation of the requested number of
@@ -802,11 +822,16 @@ proc_create()
 		filebench_shutdown(1);
 	}
 
+	int ret = pthread_create(&stat_print_tid, NULL, stat_printer, NULL);
+	if (ret)
+		return ret;
+
 	/* Wait for all threads to start */
 	if (procflow_allstarted() != 0) {
 		filebench_log(LOG_ERROR, "Could not start run");
 		return;
 	}
+	stat_print_start = 1;
 
 	/*
 	 * Make sure we create the shared memory before we wake up worker
@@ -833,6 +858,8 @@ proc_create()
 void
 proc_shutdown()
 {
+	stat_print_terminate = 1;
+	pthread_join(stat_print_tid, NULL);
 	filebench_log(LOG_INFO, "Shutting down processes");
 	procflow_shutdown();
 	if (filebench_shm->shm_required)
